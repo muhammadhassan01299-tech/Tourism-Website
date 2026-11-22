@@ -9,7 +9,7 @@ Ye ek tourism website hai. Isme customer account bana kar trip book karta hai, a
 1. **Node.js** (version 20 ya us se naya). Download: https://nodejs.org (LTS wala lo).
 2. Check karne ke liye PowerShell kholo aur likho: `node -v` — number aa jaye to theek hai.
 
-Koi database install nahi karna. Sara data `data/` folder mein file ki surat mein save hota hai.
+Local development mein database install nahi karna. `DATABASE_URL` blank ho to data `data/` folder mein file ki surat mein save hota hai. Production mein `DATABASE_URL` set karne par app Neon PostgreSQL use karti hai.
 
 ---
 
@@ -96,9 +96,9 @@ Destinations → **Add Destination** → naam, price, din likho → **Choose Pho
 
 ## 6. Live (internet par) kaise lagayen
 
-Ye website ek Node server hai, to usay aisi hosting chahiye jahan Node chalta ho aur **disk save rehti ho** (VPS, ya Railway/Render jahan "persistent disk" ho).
+Professional setup: **Render Web Service + Neon PostgreSQL**. App Node server hai aur `DATABASE_URL` milne par bookings, customers, inquiries, destinations, prices aur settings Neon database mein save karti hai.
 
-> Vercel / Netlify jaisi serverless hosting par **mat lagao**: wahan `data/` aur `.env` save nahi hote, bookings gayab ho jayengi.
+Render par `data/db.json` ko production database samjha nahi jayega. Local JSON fallback sirf development/offline use ke liye hai.
 
 Server par ye karo:
 
@@ -115,18 +115,69 @@ NODE_ENV=production npm start
 - Domain par **HTTPS** zaroor lagao (hosting wale aksar free dete hain). Admin password isi se mehfooz rehta hai.
 - Server hamesha chalta rakhne ke liye `pm2` ya hosting ka "start command" istemal karo.
 
+### Neon database connect karne ka tareeqa
+
+1. Neon.tech par account banao aur project create karo.
+2. Neon dashboard se **pooled connection string** copy karo.
+3. Render Web Service ke Environment Variables mein ye add karo:
+
+```text
+DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
+PGSSL=require
+PGPOOL_MAX=5
+```
+
+4. Render mein Build Command `npm install && npm run build` aur Start Command `npm start` rakho.
+5. Pehli successful start par app `pak_tourist_state` table khud bana degi. Agar local `data/db.json` us waqt maujood ho to initial data Neon mein migrate ho jayega.
+
+### Required Render environment variables
+
+```text
+NODE_ENV=production
+DATABASE_URL=<Neon se mili hui connection string>
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=<kam az kam 8 characters ka unique password>
+OWNER_WHATSAPP=923131498344
+SESSION_SECRET=<random 96-character hex secret>
+PGSSL=require
+PGPOOL_MAX=5
+```
+
+`SESSION_SECRET` banane ke liye local terminal mein:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Is project mein separate JWT library nahi hai. Login sessions HMAC-signed secure tokens se sign hoti hain; `SESSION_SECRET` us signing key ka kaam karta hai. Is key ko kabhi GitHub, WhatsApp ya chat mein share na karo.
+
+### Render par kya save hoga
+
+- Neon PostgreSQL: bookings, customers, inquiries, destinations, prices, offers, brand/media settings.
+- Render disk: temporary/local uploaded images aur Excel export. Agar Render persistent disk enable nahi karoge to uploads/exports deploy ke baad remove ho sakte hain.
+- High-availability production ke liye Cloudinary integration built-in hai. Cloudinary dashboard se ye values Render mein add karo:
+
+```text
+CLOUDINARY_CLOUD_NAME=<cloud name>
+CLOUDINARY_API_KEY=<api key>
+CLOUDINARY_API_SECRET=<api secret>
+```
+
+Teeno keys set hon to new logo/photos Cloudinary par upload hongi; keys blank hon to local `data/uploads/` fallback use hoga. Excel ko download/backup karna phir bhi recommended hai.
+
 ---
 
 ## 7. Data aur backup (bohat zaroori)
 
 | Cheez | Kahan hai |
 |---|---|
-| Sab bookings, customers, prices | `data/db.json` |
+| Local mode mein bookings, customers, prices | `data/db.json` |
+| Production mode mein records | Neon PostgreSQL (`DATABASE_URL`) |
 | Logo aur upload ki hui photos | `data/uploads/` |
 | Excel / CSV | `data/exports/` |
 | Login ka secret (khud banta hai) | `data/.session-secret` |
 
-**Poora `data/` folder + `.env` file** roz ya hafte mein kisi alag jagah copy kar lo. Agar ye gayab ho gaye to record wapas nahi aayega.
+Production mein Neon backups/branching enable karo. Local mode mein **poora `data/` folder + `.env` file** roz ya hafte mein kisi alag jagah copy kar lo. `.env` ko public ya GitHub par upload mat karo.
 
 ---
 
@@ -137,6 +188,8 @@ NODE_ENV=production npm start
 | Admin login par likha aaye "Admin password is not set" | `.env` mein `ADMIN_PASSWORD` (8+ characters) likho aur server dobara chalao. |
 | Password bhool gaye | `.env` mein naya `ADMIN_PASSWORD` likho, server restart karo. |
 | "Cannot reach the server" | Server band hai. `npm run dev` (ya live par `npm start`) chalao. |
+| Neon connection error | Render mein `DATABASE_URL` complete pooled URL ke saath `?sslmode=require` check karo, phir redeploy karo. |
+| Data local file mein save ho raha hai | `DATABASE_URL` blank hai; Render Environment Variables mein Neon URL add karo. |
 | Port pehle se use mein | `.env` mein `PORT=` badlo, ya purana program band karo. Dev mein port 3000 aur 3001 khali hone chahiye. |
 | Excel update nahi hui | File Excel mein khuli hai — band karo, phir "Update server file now". |
 | Upload par error | Photo 5 MB se chhoti, aur PNG/JPG/WebP/GIF honi chahiye. |

@@ -275,13 +275,38 @@ export function createApp({ rootDir, dataDir, distDir, isProd, envPath = ENV_PAT
     return { roadVehicles: vehicles, airClasses: air, departureCities: cities };
   }
 
-  function saveImage(dataUrl) {
+  async function saveImage(dataUrl) {
     const match = /^data:image\/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
     if (!match) throw new HttpError(400, 'Only PNG, JPG, GIF or WebP images are allowed.');
     const buf = Buffer.from(match[2], 'base64');
     if (buf.length > 6 * 1024 * 1024) throw new HttpError(413, 'Image is larger than 6 MB.');
     const sig = IMAGE_SIGNATURES.find((s) => s.test(buf));
     if (!sig) throw new HttpError(400, 'File content is not a valid image.');
+
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+    const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+    const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+    if (cloudName && apiKey && apiSecret) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signature = crypto
+        .createHash('sha1')
+        .update(`timestamp=${timestamp}${apiSecret}`)
+        .digest('hex');
+      const form = new FormData();
+      form.append('file', new Blob([buf], { type: `image/${sig.ext === 'jpg' ? 'jpeg' : sig.ext}` }), `upload.${sig.ext}`);
+      form.append('api_key', apiKey);
+      form.append('timestamp', String(timestamp));
+      form.append('signature', signature);
+      const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/auto/upload`, {
+        method: 'POST',
+        body: form,
+      });
+      if (!response.ok) throw new HttpError(502, 'Image storage provider rejected the upload.');
+      const uploaded = await response.json();
+      if (!uploaded.secure_url) throw new HttpError(502, 'Image storage provider returned no image URL.');
+      return uploaded.secure_url;
+    }
+
     const name = `${Date.now()}-${crypto.randomBytes(5).toString('hex')}.${sig.ext}`;
     fs.writeFileSync(path.join(uploadsDir, name), buf);
     return `/uploads/${name}`;
@@ -297,6 +322,8 @@ export function createApp({ rootDir, dataDir, distDir, isProd, envPath = ENV_PAT
 
   // ---- routes --------------------------------------------------------------
   async function handleApi(req, res, url) {
+    // On Render/Neon, wait for the database snapshot before serving any request.
+    await store.ready;
     const method = req.method || 'GET';
     const route = url.pathname.replace(/\/+$/, '') || '/';
     const ip = clientIp(req);
@@ -497,7 +524,7 @@ export function createApp({ rootDir, dataDir, distDir, isProd, envPath = ENV_PAT
 
     if (method === 'POST' && route === '/api/admin/upload') {
       const body = await readBody(req, 9 * 1024 * 1024);
-      return send(res, 201, { url: saveImage(body.dataUrl) });
+      return send(res, 201, { url: await saveImage(body.dataUrl) });
     }
 
     if (method === 'PATCH' && route.startsWith('/api/admin/bookings/')) {
